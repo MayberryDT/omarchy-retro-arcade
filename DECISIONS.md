@@ -149,3 +149,21 @@ This changes packaging only, not artwork, gameplay, save paths or recovery polic
   in `games/tanks/README.md`. Values remain provisional until recorded playtesting.
   Cloned simulation state is not yet a disk persistence contract. AI, native UI,
   storage, audio and Omarchy acceptance remain subsequent slices of issue #8.
+
+### Tanks playable preview
+
+- Append Tanks as the twelfth shelf entry using the existing ArcadeGame lifecycle,
+  theme loader and cabinet presentation. Native geometry, labelled numerical aim,
+  explicit fire and turn handover support mouse and keyboard in one window.
+- Easy/Normal AI incrementally evaluates ordinary engine shots. Normal also tries
+  limited repositioning; both compare limited weapons and penalise self-damage.
+  Work has a fixed per-call tick/candidate budget. Pausing discards search; resuming
+  reconstructs it from the saved visible match and dedicated AI seed, preserving
+  the eventual choice without accessing future terrain randomness.
+- Versioned tanks.json uses bounded validated reads and shared atomic private
+  writes, with exact projectile/RNG/trace state. Rejected saves disable writes until
+  explicit unique archival succeeds. Match records and preferences are logically
+  separate from active match state. Reopening always pauses.
+- This is a silent playable preview. Effects, original audio, visual refinement
+  and hands-on benchmark comparison remain open; reduced-effects preference is
+  reserved for upcoming animation. Headless checks do not establish Omarchy feel.

@@ -10,7 +10,7 @@ const HALF_WIDTH: f64 = 12.0;
 const BODY_HEIGHT: f64 = 14.0;
 const GRAVITY: f64 = 100.0;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
     pub x: f64,
     pub y: f64,
@@ -24,7 +24,7 @@ impl Point {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Weapon {
     Shell,
     Heavy,
@@ -47,7 +47,7 @@ impl Weapon {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct Tank {
     pub position: Point,
     pub health: u16,
@@ -89,7 +89,7 @@ impl Tank {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct Terrain {
     heights: Vec<f64>,
 }
@@ -169,7 +169,7 @@ impl Terrain {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 struct Rng(u64);
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -181,7 +181,7 @@ impl Rng {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Ready,
     Aiming,
@@ -189,7 +189,7 @@ pub enum Phase {
     RoundOver { winner: Option<usize> },
     MatchOver { winner: usize },
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rejected {
     WrongPhase,
     OutOfRange,
@@ -199,14 +199,14 @@ pub enum Rejected {
     Steep,
     Occupied,
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Projectile {
     pub position: Point,
     pub velocity: Point,
     pub ticks: u32,
     pub weapon: Weapon,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct Game {
     terrain: Terrain,
     tanks: [Tank; 2],
@@ -244,6 +244,91 @@ impl Game {
             seed,
             projectile: None,
             traces: [Vec::new(), Vec::new()],
+        }
+    }
+    /// Validate untrusted saved state before allowing it into the simulation.
+    pub fn valid(&self) -> bool {
+        if self.terrain.heights.len() != WIDTH + 1
+            || !self
+                .terrain
+                .heights
+                .iter()
+                .all(|y| y.is_finite() && (280.0..=FLOOR).contains(y))
+            || self.active > 1
+            || self.starter > 1
+            || self.round == 0
+            || !self.wind.is_finite()
+            || !(-20.0..=20.0).contains(&self.wind)
+            || self.wins.iter().any(|&v| v > 2)
+            || self.wins.iter().filter(|&&v| v == 2).count() > 1
+        {
+            return false;
+        }
+        for tank in &self.tanks {
+            if !tank.position.x.is_finite()
+                || !(HALF_WIDTH..=WIDTH as f64 - HALF_WIDTH).contains(&tank.position.x)
+                || !tank.position.y.is_finite()
+                || tank.position.y != self.terrain.support(tank.position.x)
+                || tank.health > 100
+                || !tank.fuel.is_finite()
+                || !(0.0..=60.0).contains(&tank.fuel)
+                || !(5..=175).contains(&tank.angle)
+                || !(1..=100).contains(&tank.power)
+                || tank.heavy > 3
+                || tank.diggers > 2
+            {
+                return false;
+            }
+        }
+        if (self.tanks[0].position.x - self.tanks[1].position.x).abs() <= 2.0 * HALF_WIDTH {
+            return false;
+        }
+        let point_ok = |p: &Point| {
+            p.x.is_finite()
+                && p.y.is_finite()
+                && (0.0..=WIDTH as f64).contains(&p.x)
+                && (-10_000.0..=HEIGHT).contains(&p.y)
+        };
+        if !self
+            .traces
+            .iter()
+            .all(|t| t.len() <= MAX_FLIGHT_TICKS as usize + 1 && t.iter().all(point_ok))
+        {
+            return false;
+        }
+        let alive = [self.tanks[0].health > 0, self.tanks[1].health > 0];
+        match self.phase {
+            Phase::Flying => {
+                if alive != [true, true] || self.wins.contains(&2) {
+                    return false;
+                }
+                self.projectile.is_some_and(|p| {
+                    point_ok(&p.position)
+                        && p.velocity.x.is_finite()
+                        && p.velocity.y.is_finite()
+                        && p.velocity.x.abs() <= 1000.0
+                        && p.velocity.y.abs() <= 2500.0
+                        && p.ticks < MAX_FLIGHT_TICKS
+                })
+            }
+            Phase::Ready | Phase::Aiming => {
+                self.projectile.is_none() && alive == [true, true] && !self.wins.contains(&2)
+            }
+            Phase::RoundOver { winner } => {
+                self.projectile.is_none()
+                    && !self.wins.contains(&2)
+                    && match winner {
+                        None => alive == [false, false],
+                        Some(i) => i < 2 && alive[i] && !alive[1 - i] && self.wins[i] > 0,
+                    }
+            }
+            Phase::MatchOver { winner } => {
+                self.projectile.is_none()
+                    && winner < 2
+                    && self.wins[winner] == 2
+                    && alive[winner]
+                    && !alive[1 - winner]
+            }
         }
     }
     pub fn terrain(&self) -> &Terrain {

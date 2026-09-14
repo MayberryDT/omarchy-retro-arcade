@@ -2,3 +2,9 @@
 #![forbid(unsafe_code)]
 
 pub mod rules;
+
+pub mod ai;
+
+#[cfg(feature = "desktop")]
+pub mod app;
+pub mod storage;

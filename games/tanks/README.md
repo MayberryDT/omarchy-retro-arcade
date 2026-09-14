@@ -1,8 +1,12 @@
-# Tanks — engine preview
+# Tanks — playable preview
 
-First implementation slice of [issue #8](https://github.com/tcballard/omarchy-retro-arcade/issues/8).
-This dependency-free Rust library is in the workspace but is **not yet on the Arcade shelf**.
-It has no UI, AI, audio, storage writes, executable or runtime downloads.
+Implementation of [issue #8](https://github.com/tcballard/omarchy-retro-arcade/issues/8)
+inside the existing native Arcade window. The engine builds without desktop features;
+Arcade enables the egui frontend and appends Tanks to the shelf. Solo Easy/Normal AI,
+local two-player turns and protected resumable matches are implemented.
+
+See [player controls](HELP.md). This is a silent preview; sound, impact/settling
+animation, visual refinement and hands-on Omarchy acceptance are still pending.
 
 ## Rules implemented
 
@@ -63,8 +67,9 @@ Determinism means identical tick-stamped inputs and seed on the same build and
 floating-point target. Cross-platform bitwise replay is not promised: launch
 trigonometry uses the standard library. There is no wall clock, rendering delta,
 window size, global randomness or background worker in this engine. `Clone`
-retains complete in-memory state, including the projectile and RNG. It is **not**
-a disk save format or evidence of save/reopen support.
+retains complete in-memory state, including the projectile and RNG. The versioned persistence layer serializes this state with floating-point roundtrip
+support, validates it before use and uses private atomic storage. Reopening pauses;
+AI work restarts from its saved seed without changing its eventual choice.
 
 ## Verification
 
@@ -106,20 +111,37 @@ make the next action obvious without a separate aiming-mode tutorial:
 - Preserve the two-tank solo/local scope, existing shortcut table, three weapons
   and best-of-three rules. Additional players and terrain modes remain deferred.
 
-This is a frontend brief, not implemented or visually verified UI. Implementation
-and assets remain original; no third-party game source, art or sounds are bundled.
+The native preview implements these controls; impact/settling animation is pending.
+Implementation and assets remain original; no third-party game source, art or sounds
+are bundled. Native visual acceptance remains pending.
 
-## Next implementation slices
+## AI and persistence
 
-1. Bounded Easy/Normal AI using production physics and recorded RNG state;
-   repeatable shot-quality and legal-turn tests.
-2. Versioned bounded saves in Arcade's state directory, exact mid-flight resume,
-   separate preferences/records, atomic writes and explicit rejected-save recovery.
-3. Native `ArcadeGame` frontend with appended shelf entry, theme-aware geometric
-   art, mouse/keyboard parity, numerical aiming controls, pause, focus-loss input
-   clearing, fresh-press handover and original owned audio.
-4. Real app input/capture checks at light/dark, compact and 200% scale; packaged
-   install/upgrade checks; hands-on Omarchy/Wayland balance and feel verification.
+Easy searches 54 seeded coarse shots. Normal retains that pass, adds 119 finer
+shots and 36 repositioned shots, then each difficulty compares available Heavy
+and Digger ammunition at its best shell aim. Each call starts at most 32 candidates
+and simulates at most 4096 ticks; the frontend requests 1024 ticks per frame.
+Scores reward enemy damage and wins, penalise self-damage/death, and charge for
+movement and limited ammunition. Dropping the search cancels it. Results cannot
+apply to a changed match, and failed movement never partially changes live state.
 
-Do not close issue #8 on this engine milestone. No artwork or sound assets have
-been added. All new engine code is original GPL-3.0-or-later code.
+The 512 KiB bounded tanks.json contains the match, AI seed, mode/difficulty,
+preferences and separately counted solo/local records. It checks rules/schema,
+terrain dimensions and bounds, support, resources, phase, projectiles and traces.
+Corrupt/future files remain in place and disable writes until explicit archival.
+Record observation is idempotent. Original bytes are copied into a new private,
+synced archive before reset. No other game data is modified.
+
+## Verification and remaining acceptance
+
+- 19 engine/AI/storage tests, plus three real egui input/lifecycle tests with desktop
+  features. These include complete computer-versus-computer match progression,
+  difficulty comparisons, fixed work budgets, mid-flight JSON resume and rejected
+  save preservation. These are headless checks, not hands-on desktop evidence.
+- Native CI covers twelve-game switching and light/dark/compact/200% captures.
+- Pending: sound, impact/settling animation, visual inspection of actual app
+  captures, complete mouse-only/keyboard-only human matches, aim/difficulty/terrain
+  fairness playtesting on Omarchy/Wayland, and final Arch install/upgrade evidence.
+
+Do not close issue #8 on this preview. All new engine/frontend code and shelf
+geometry are original GPL-3.0-or-later work.
