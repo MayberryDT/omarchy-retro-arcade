@@ -81,6 +81,34 @@ flight, expiry and cloned mid-flight state under different tick batch sizes.
 The standalone `tanks-engine` CI job runs this crate without native dependencies;
 the existing workspace, native switching and Arch package gates remain in place.
 
+## Native interaction direction
+
+Keep the full side-view battlefield readable around a compact control strip.
+Use original Omarchy geometry and the shared cabinet palette. The controls should
+make the next action obvious without a separate aiming-mode tutorial:
+
+- Mark the active tank with a small labelled chevron; retain player labels and
+  distinct track/body details so ownership is readable without relying on colour.
+- Group angle, power and an explicit Fire button together. Show numerical values
+  beside the angle control and power gauge; allow barrel dragging, step buttons
+  and the issue's Up/Down and Left/Right keyboard controls.
+- Allow wheel adjustment only while hovering the power control. Consume that
+  event so adjusting power cannot also scroll the surrounding interface.
+- Keep the cursor visible and local to the window while aiming. Use normal drag
+  capture, with no pointer warping or screen-edge wrapping.
+- Keep health, wind, fuel and weapon supply visible. Aiming should show barrel
+  direction, not an exact predicted ballistic path. Retain the previous-shot
+  trace as the player's useful reference for the next adjustment.
+- Present a clear launch, flight, impact and settling sequence. Enable the next
+  turn only after its presentation completes and the next player accepts Ready.
+  The engine already resolves damage once; visual settling must never calculate
+  another damage event or allow input against a partly displayed result.
+- Preserve the two-tank solo/local scope, existing shortcut table, three weapons
+  and best-of-three rules. Additional players and terrain modes remain deferred.
+
+This is a frontend brief, not implemented or visually verified UI. Implementation
+and assets remain original; no third-party game source, art or sounds are bundled.
+
 ## Next implementation slices
 
 1. Bounded Easy/Normal AI using production physics and recorded RNG state;
