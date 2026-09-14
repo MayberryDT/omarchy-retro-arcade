@@ -1,0 +1,111 @@
+name: Publish verified Arcade v0.2.0
+on:
+  push:
+    branches: [release/publish-v0.2.0]
+    paths: [.github/workflows/publish-v0.2.0.yml]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: publish-arcade-v0.2.0
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: tcballard/omarchy-retro-arcade
+      SOURCE_SHA: 56d753e87c4eb78dbccbf270c56f3b0c436bf2b1
+      SOURCE_RUN: '34895219431'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 56d753e87c4eb78dbccbf270c56f3b0c436bf2b1
+          persist-credentials: false
+      - name: Require successful CI on the exact release commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 100); do
+            gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > /tmp/source-run.json
+            jq -e '.head_sha == env.SOURCE_SHA and .head_branch == "main" and .event == "push"' /tmp/source-run.json
+            if [[ "$(jq -r .status /tmp/source-run.json)" == completed ]]; then
+              jq -e '.conclusion == "success"' /tmp/source-run.json
+              break
+            fi
+            [[ "$attempt" != 100 ]] || exit 1
+            sleep 20
+          done
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN/jobs?per_page=100" > /tmp/source-jobs.json
+          jq -e '[.jobs[] | select(.name == "native" or .name == "arch" or .name == "tanks-engine")] | length == 3 and all(.conclusion == "success")' /tmp/source-jobs.json
+      - name: Download and verify candidate assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN/artifacts?per_page=100" > /tmp/artifacts.json
+          jq -e '[.artifacts[] | select(.name == "release-v0.2.0-x86_64" and .expired == false)] | length == 1' /tmp/artifacts.json
+          artifact_id=$(jq -r '.artifacts[] | select(.name == "release-v0.2.0-x86_64") | .id' /tmp/artifacts.json)
+          digest=$(jq -r '.artifacts[] | select(.name == "release-v0.2.0-x86_64") | .digest' /tmp/artifacts.json)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          gh api "repos/$GH_REPO/actions/artifacts/$artifact_id/zip" > /tmp/candidate.zip
+          printf '%s  %s\n' "${digest#sha256:}" /tmp/candidate.zip | sha256sum --check
+          mkdir /tmp/candidate
+          unzip -q /tmp/candidate.zip -d /tmp/candidate
+          cd /tmp/candidate
+          sha256sum --strict --check SHA256SUMS
+          test "$(find . -type f | wc -l)" = 5
+          test -f omarchy-retro-arcade-0.2.0-1-x86_64.pkg.tar.zst
+          test -f omarchy-retro-arcade-0.2.0-corresponding-source.tar.gz
+          grep -Fxq 'version=0.2.0' BUILD.txt
+          grep -Fxq "commit=$SOURCE_SHA" BUILD.txt
+          grep -Fxq "workflow_run=$SOURCE_RUN" BUILD.txt
+          grep -Fxq 'architecture=x86_64' BUILD.txt
+          test "$(sed -n 's/^tree=//p' BUILD.txt)" = "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD^{tree})"
+          tar -xOf omarchy-retro-arcade-0.2.0-corresponding-source.tar.gz sources/omarchy-retro-arcade-source.tar.gz > /tmp/app-source.tar.gz
+          printf '%s  %s\n' "$(sed -n 's/^app_source_sha256=//p' BUILD.txt)" /tmp/app-source.tar.gz | sha256sum --check
+          git -C "$GITHUB_WORKSPACE" archive --format=tar --prefix=omarchy-retro-arcade/ HEAD > /tmp/expected-source.tar
+          gzip -dc /tmp/app-source.tar.gz > /tmp/app-source.tar
+          cmp /tmp/app-source.tar /tmp/expected-source.tar
+      - name: Prepare public release description
+        shell: bash
+        run: |
+          cat > /tmp/release-notes.md <<'NOTES'
+          # Omarchy Arcade v0.2.0
+
+          Twelve games in one native Omarchy app: Circuit Pinball, Solitaire, Scram, Invaders, Chess, Stack, Snake, Bubble, Blast, 2048, Shatter and Tanks. Offline play needs no account, and the Arch package includes Stockfish for computer Chess.
+
+          - **Tanks:** solo Easy/Normal AI and local two-player artillery, destructible hills, wind and three weapons. Original sound, recoil, animated impacts, falling tanks, damage feedback and reduced effects. Saves preserve shots in flight and terrain settling.
+          - **Circuit Pinball:** type and edit high-score names, paste reliably with Ctrl+V, and retain UTF-8 names across restarts. Thanks to CanadaApollo6 for #38.
+          - **2048 and Shatter** join the earlier nine-game collection. Existing game credits, artwork notices and save locations are retained.
+
+          Download the x86_64 player package and SHA256SUMS from the assets below, then run:
+
+          ```sh
+          sha256sum --ignore-missing --check SHA256SUMS
+          sudo pacman -U ./omarchy-retro-arcade-0.2.0-1-x86_64.pkg.tar.zst
+          omarchy-retro-arcade --version
+          ```
+
+          Close Arcade before upgrading and back up existing saves. Pinball preserves records/settings, not unfinished tables. Pacman manages updates. Downgrading a package does not reverse save-schema changes: retain the matching backup and old package.
+
+          The exact tagged commit passed engine, native and Arch CI, including twelve-game switching, high-score paste regressions, installation and same-package save-preservation checks. This is Linux/Xvfb evidence; live Omarchy/Wayland audio and gameplay acceptance, old-version migration coverage and aarch64 binaries remain unverified. Target: Omarchy 4 / Hyprland. Community app; not an official Omarchy package.
+
+          BUILD.txt records the source commit and build run. SHA256SUMS covers the complete checked asset set; the corresponding-source archive includes application source, pinned Stockfish source and its network. The bundled RELEASE-NOTES.md records preparation-time evidence; this description records publication status.
+          NOTES
+          printf '\n[Verified build](https://github.com/%s/actions/runs/%s) · [Migration and save locations](https://github.com/%s/blob/%s/docs/MIGRATION.md)\n' "$GH_REPO" "$SOURCE_RUN" "$GH_REPO" "$SOURCE_SHA" >> /tmp/release-notes.md
+      - name: Create draft, upload verified assets, then publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Existing tags/releases must be reconciled explicitly, never overwritten.
+          gh api "repos/$GH_REPO/git/matching-refs/tags/v0.2.0" > /tmp/tags.json
+          jq -e '[.[] | select(.ref == "refs/tags/v0.2.0")] | length == 0' /tmp/tags.json
+          gh release list --json tagName --limit 100 | jq -e 'all(.tagName != "v0.2.0")'
+          gh release create v0.2.0 --target "$SOURCE_SHA" --draft --title 'Omarchy Arcade v0.2.0' --notes-file /tmp/release-notes.md /tmp/candidate/*
+          gh release view v0.2.0 --json assets,isDraft > /tmp/release.json
+          jq -e '.isDraft == true and (.assets | length == 5)' /tmp/release.json
+          mkdir /tmp/upload-check
+          gh release download v0.2.0 --dir /tmp/upload-check
+          (cd /tmp/upload-check && sha256sum --strict --check SHA256SUMS)
+          gh release edit v0.2.0 --draft=false --latest
