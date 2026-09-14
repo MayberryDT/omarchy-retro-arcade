@@ -20,8 +20,8 @@ with tempfile.TemporaryDirectory(prefix='arcade-tanks-') as tmp:
     def read(): return json.loads(save.read_text())
     app,w = launch()
     try:
-        key(ord('q'),True);app.wait(timeout=8)
-        initial = read();initial['mode']='Local';save.write_text(json.dumps(initial))
+        key(ord('m'),True);key(ord('3'));key(ord('q'),True);app.wait(timeout=8)
+        initial = read();assert initial['started'] and initial['mode']=='Local' and not initial['sound']
         app,w = launch()
         key(0x20);key(ord('q'),True);app.wait(timeout=8)
         assert read()['game'] == initial['game'], 'Paused Space changed the match'

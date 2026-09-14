@@ -5,8 +5,10 @@ inside the existing native Arcade window. The engine builds without desktop feat
 Arcade enables the egui frontend and appends Tanks to the shelf. Solo Easy/Normal AI,
 local two-player turns and protected resumable matches are implemented.
 
-See [player controls](HELP.md). This is a silent preview; sound, impact/settling
-animation, visual refinement and hands-on Omarchy acceptance are still pending.
+See [player controls](HELP.md) and [current verification](VERIFICATION.md). Original
+synthesized sounds, launch recoil/flash, weapon-specific impacts, crater opening,
+falling tanks, damage labels, aiming arcs, held controls and a first-run chooser
+are implemented. Hands-on Omarchy acceptance is still pending.
 
 ## Rules implemented
 
@@ -111,9 +113,9 @@ make the next action obvious without a separate aiming-mode tutorial:
 - Preserve the two-tank solo/local scope, existing shortcut table, three weapons
   and best-of-three rules. Additional players and terrain modes remain deferred.
 
-The native preview implements these controls; impact/settling animation is pending.
+The native preview implements these controls and a saved 108-tick impact sequence.
 Implementation and assets remain original; no third-party game source, art or sounds
-are bundled. Native visual acceptance remains pending.
+are bundled. Native X11 captures are checked separately from Omarchy/Wayland acceptance.
 
 ## AI and persistence
 
@@ -132,16 +134,24 @@ Corrupt/future files remain in place and disable writes until explicit archival.
 Record observation is idempotent. Original bytes are copied into a new private,
 synced archive before reset. No other game data is modified.
 
-## Verification and remaining acceptance
+## Build, run and acceptance
 
-- 19 engine/AI/storage tests, plus three real egui input/lifecycle tests with desktop
-  features. These include complete computer-versus-computer match progression,
-  difficulty comparisons, fixed work budgets, mid-flight JSON resume and rejected
-  save preservation. These are headless checks, not hands-on desktop evidence.
-- Native CI covers twelve-game switching and light/dark/compact/200% captures.
-- Pending: sound, impact/settling animation, visual inspection of actual app
-  captures, complete mouse-only/keyboard-only human matches, aim/difficulty/terrain
-  fairness playtesting on Omarchy/Wayland, and final Arch install/upgrade evidence.
+```sh
+cargo build -p omarchy-retro-arcade --locked
+./target/debug/omarchy-retro-arcade --game tanks
+cargo test -p omarchy-tanks --features desktop --locked
+```
 
-Do not close issue #8 on this preview. All new engine/frontend code and shelf
-geometry are original GPL-3.0-or-later work.
+Target: Omarchy 4 / Hyprland, native Wayland. Current checks run on headless Linux
+with Xvfb; no claim of live Omarchy desktop acceptance. See [verification](VERIFICATION.md)
+for exact source inputs, commands, renders and remaining gates.
+
+To roll back this development preview, check out the previous revision and rebuild.
+Retain `$XDG_STATE_HOME/omarchy-retro-arcade/tanks.json` (normally under
+`~/.local/state`); never delete saves during rollback. The added presentation and
+sound fields are optional for old preview saves. Other game save paths are unchanged.
+
+Do not close issue #8 on this preview. Human keyboard/mouse match completion,
+AI/terrain fairness and Arch install/upgrade acceptance remain pending.
+All new engine/frontend code, synthesized sound and shelf geometry are original
+GPL-3.0-or-later work.

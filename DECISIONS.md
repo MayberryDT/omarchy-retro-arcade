@@ -167,3 +167,23 @@ This changes packaging only, not artwork, gameplay, save paths or recovery polic
 - This is a silent playable preview. Effects, original audio, visual refinement
   and hands-on benchmark comparison remain open; reduced-effects preference is
   reserved for upcoming animation. Headless checks do not establish Omarchy feel.
+
+## Tanks impact and control polish
+
+- Keep damage resolution in the deterministic engine. `tick_event` returns an
+  immutable pre-impact snapshot and actual blast/fall damage; the frontend saves
+  a separate 108-tick presentation. Pause, shelf, close and reopen retain exact
+  settling progress. No commands or AI advance until presentation completes.
+- Reduced effects uses final positions with static feedback, preserving the same
+  rules and turn delay. Effects use stable visual noise, never the engine RNG.
+- Original bounded synthesized PCM cues use an owned, reaped paplay process.
+  Mute, pause, focus loss and shelf exit stop playback. Missing or failed audio
+  is nonfatal and reported in Settings. No new package dependency is introduced
+  (the Arch package already includes libpulse).
+- Fresh installs choose Solo Easy, Solo Normal or Local. Optional saved fields
+  preserve old preview matches. Held aiming is time-based; explicit Fire and
+  release-to-rearm prevent handover inputs from becoming accidental shots.
+- Add original layered terrain, track details, aiming arcs, a wind flag, recoil,
+  flashes, weapon-specific impacts and damage labels. Native X11 renders are
+  inspected at dark/light, compact and 200%; this does not establish Omarchy
+  Wayland acceptance or competitive balance against the gameplay benchmark.

@@ -377,7 +377,7 @@ impl eframe::App for Arcade {
         if self.about {
             egui::Window::new("About Omarchy Arcade").open(&mut self.about).show(ctx,|ui|{
             ui.heading("Omarchy Arcade");ui.label(concat!("Version ",env!("CARGO_PKG_VERSION")));ui.label("Native games. A community project for Omarchy.");
-            ui.label("Tanks: original Arcade artillery game. Preview; silent audio.");
+            ui.label("Tanks: original Arcade artillery game. Preview; original synthesized sound.");
             ui.label("Shatter: original Arcade game, layouts and synthesized audio.");
             ui.hyperlink_to("2048: Avi Barit (avibarit)", "https://github.com/avibarit/2048");
             ui.hyperlink_to("Original 2048: Gabriele Cirulli", "https://github.com/gabrielecirulli/2048");

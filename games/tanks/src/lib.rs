@@ -8,3 +8,7 @@ pub mod ai;
 #[cfg(feature = "desktop")]
 pub mod app;
 pub mod storage;
+
+#[cfg(feature = "desktop")]
+mod audio;
+pub mod effects;

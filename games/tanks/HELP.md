@@ -5,8 +5,8 @@ the match. Shells are unlimited; each tank has three Heavy shells, two Diggers
 and 60 units of movement per round. Blasts hurt either player and falling can
 cause extra damage. Both tanks eliminated together means a drawn round.
 
-Choose New match from Pause for Solo Easy, Solo Normal or Two local players.
-The initial match uses Solo Normal. A saved match always opens paused.
+On first launch choose Solo Easy (1), Solo Normal (2) or Two local players (3).
+Pause offers New match with the same choices. A saved match always opens paused.
 
 | Action | Mouse | Keyboard |
 | --- | --- | --- |
@@ -17,6 +17,7 @@ The initial match uses Solo Normal. A saved match always opens paused.
 | Fire | Fire button | Space |
 | Ready / next round | Labelled button | Enter |
 | Pause / resume | Pause / Resume | Escape |
+| Sound / mute | Sound button | Ctrl+M |
 | Settings | Settings button | Ctrl+, |
 | Collection | Back to Arcade | Ctrl+H |
 
@@ -29,6 +30,10 @@ Matches save when a shot finishes, on pause and when leaving. A damaged or newer
 save remains untouched and saving is disabled. Pause offers an explicit Archive
 original and reset action that retains the original in a separate file first.
 
-This preview is silent. Impact/settling animation, visual polish and hands-on
-Omarchy balance testing are still pending. Reduced effects is a saved preference
-reserved for those effects. The current UI settles terrain immediately on impact.
+Each weapon has its own impact and original sound cue. Terrain opens into a crater,
+tanks settle and damage labels show blast and fall damage before handover. Pause or
+leaving preserves this sequence without applying damage twice. Reduced effects in
+Settings removes recoil, particles, flutter and animated settling while retaining
+clear damage feedback. Sound requires the desktop's paplay audio output.
+
+Hands-on Omarchy balance testing remains pending.

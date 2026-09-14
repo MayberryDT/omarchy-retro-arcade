@@ -10,6 +10,18 @@ const HALF_WIDTH: f64 = 12.0;
 const BODY_HEIGHT: f64 = 14.0;
 const GRAVITY: f64 = 100.0;
 
+/// Authoritative impact snapshot. Rendering may interpolate it but never applies damage.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Impact {
+    pub shooter: usize,
+    pub at: Point,
+    pub weapon: Weapon,
+    pub terrain_before: Vec<f64>,
+    pub tanks_before: [Tank; 2],
+    pub blast: [u16; 2],
+    pub fall: [u16; 2],
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
     pub x: f64,
@@ -455,8 +467,11 @@ impl Game {
     }
     /// Exactly one 120 Hz tick. Outside flight this is a no-op.
     pub fn tick(&mut self) {
+        let _ = self.tick_event();
+    }
+    pub fn tick_event(&mut self) -> Option<Impact> {
         if self.phase != Phase::Flying {
-            return;
+            return None;
         }
         let mut shot = self.projectile.expect("flight owns a projectile");
         let start = shot.position;
@@ -473,22 +488,23 @@ impl Game {
         if let Some(t) = collision.filter(|&t| exit.is_none_or(|e| t <= e)) {
             let at = start.lerp(end, t);
             self.traces[self.active].push(at);
-            self.explode(at, shot.weapon);
+            let impact = self.explode(at, shot.weapon);
             self.finish_shot();
-            return;
+            return Some(impact);
         }
         if let Some(t) = exit {
             self.traces[self.active].push(start.lerp(end, t));
             self.finish_shot();
-            return;
+            return None;
         }
         self.traces[self.active].push(end);
         if shot.ticks >= MAX_FLIGHT_TICKS {
             self.finish_shot();
-            return;
+            return None;
         }
         shot.position = end;
         self.projectile = Some(shot);
+        None
     }
     fn collision(&self, start: Point, end: Point) -> Option<f64> {
         let mut first: Option<f64> = None;
@@ -537,7 +553,10 @@ impl Game {
         }
         first
     }
-    fn explode(&mut self, at: Point, weapon: Weapon) {
+    fn explode(&mut self, at: Point, weapon: Weapon) -> Impact {
+        let terrain_before = self.terrain.heights.clone();
+        let mut blast = [0; 2];
+        let mut fall_damage = [0; 2];
         let snapshot = self.tanks.clone();
         let damage: [u16; 2] = std::array::from_fn(|i| {
             let p = snapshot[i].centre();
@@ -549,8 +568,19 @@ impl Game {
         for i in 0..2 {
             let y = self.terrain.support(snapshot[i].position.x);
             let fall = ((y - snapshot[i].position.y - 20.0).max(0.0) / 2.0).floor() as u16;
+            blast[i] = damage[i].min(snapshot[i].health);
+            fall_damage[i] = fall.min(snapshot[i].health - blast[i]);
             self.tanks[i].health = snapshot[i].health.saturating_sub(damage[i] + fall);
             self.tanks[i].position.y = y;
+        }
+        Impact {
+            shooter: self.active,
+            at,
+            weapon,
+            terrain_before,
+            tanks_before: snapshot,
+            blast,
+            fall: fall_damage,
         }
     }
     fn finish_shot(&mut self) {

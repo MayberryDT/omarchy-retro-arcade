@@ -1,3 +1,9 @@
+fn sound_default() -> bool {
+    true
+}
+fn started_default() -> bool {
+    true
+}
 use crate::{
     ai::Difficulty,
     rules::{Game, Phase, RULES_VERSION},
@@ -27,6 +33,12 @@ pub struct Save {
     pub solo_losses: u64,
     pub local_matches: u64,
     pub reduced_effects: bool,
+    #[serde(default = "sound_default")]
+    pub sound: bool,
+    #[serde(default)]
+    pub resolution: Option<crate::effects::Resolution>,
+    #[serde(default = "started_default")]
+    pub started: bool,
 }
 impl Default for Save {
     fn default() -> Self {
@@ -42,6 +54,9 @@ impl Default for Save {
             solo_losses: 0,
             local_matches: 0,
             reduced_effects: false,
+            sound: true,
+            resolution: None,
+            started: false,
         }
     }
 }
@@ -63,11 +78,14 @@ impl Save {
         self.game = Game::new(seed);
         self.ai_seed = seed ^ 0x54414e4b53;
         self.recorded = false;
+        self.resolution = None;
+        self.started = true;
     }
     pub fn valid(&self) -> bool {
         self.version == 1
             && self.rules == RULES_VERSION
             && self.game.valid()
+            && self.resolution.as_ref().is_none_or(|r| r.valid(&self.game))
             && (!self.recorded || matches!(self.game.phase(), Phase::MatchOver { .. }))
     }
 }
@@ -214,5 +232,19 @@ mod tests {
             assert_eq!(fs::read(a).unwrap(), bytes);
             assert_eq!(fs::read(&path).unwrap(), bytes);
         }
+    }
+    #[test]
+    fn older_preview_defaults_resume_without_replacing_the_match() {
+        let mut value = serde_json::to_value(Save::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        for key in ["started", "sound", "resolution"] {
+            object.remove(key);
+        }
+        let save: Save = serde_json::from_value(value).unwrap();
+        assert!(save.valid());
+        assert!(save.started);
+        assert!(save.sound);
+        assert!(save.resolution.is_none());
+        assert_eq!(save.game, Save::default().game);
     }
 }

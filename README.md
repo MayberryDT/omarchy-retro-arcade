@@ -2,6 +2,8 @@
 
 [![Built for Omarchy](https://raw.githubusercontent.com/tcballard/omarchy-badges/85f859029e236e784e7b05ada6dbe73506d07a91/badges/v1/built-for-omarchy.svg)](https://github.com/tcballard/omarchy-badges)
 
+<a href="https://github.com/tcballard/omarchy-badges"><img src="https://raw.githubusercontent.com/tcballard/omarchy-badges/75975e5b5bf75e7ede3764bcd2950046f7abfe2c/badges/v1/omarchy-app.svg" height="20" alt="Omarchy App community badge"></a>
+
 **Twelve games. One native app. One more go.**
 
 A collection of classic games for Omarchy. Play pinball, cards, puzzles and arcade games in one native window, with offline play, local saves and an interface that follows your desktop theme.
@@ -102,4 +104,4 @@ Stack includes offline Marathon and 40-line Sprint, local records and exact resu
 
 Shatter is an original brick breaker: 20 authored levels, mouse/keyboard play, three power-ups, campaign saves and unlocked-level practice. [Controls and verification](games/shatter/README.md). Hands-on Omarchy acceptance is pending.
 
-Tanks is an artillery preview with solo Easy/Normal AI, local two-player matches, destructible hills and resumable matches. [Controls and current limitations](games/tanks/HELP.md). Sound, impact/settling animation and hands-on Omarchy acceptance remain pending.
+Tanks is an artillery preview with solo Easy/Normal AI, local two-player matches, destructible hills and resumable matches. [Controls and current limitations](games/tanks/HELP.md). Includes original sound cues, animated impacts and settling, aiming aids and reduced effects. Hands-on Omarchy acceptance remains pending; [polish verification](games/tanks/VERIFICATION.md).

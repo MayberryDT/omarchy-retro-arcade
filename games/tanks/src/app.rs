@@ -1,13 +1,17 @@
 use crate::{
     ai::{Difficulty, Search},
-    rules::{Phase, Point, Weapon, DT},
+    audio::{Audio, Cue},
+    effects::Resolution,
+    rules::{Phase, Point, Rejected, Weapon, DT},
     storage::{self, Mode, Save},
 };
-use eframe::egui::{self, Align2, FontId, Key, Pos2, Rect, Sense, Stroke, Vec2};
+use eframe::egui::{self, Align2, Key, Pos2, Rect, RichText, Sense, Vec2};
 use std::{
     path::PathBuf,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+#[path = "render.rs"]
+mod render;
 
 pub struct App {
     save: Save,
@@ -24,6 +28,10 @@ pub struct App {
     last: Instant,
     accumulator: f64,
     movement_clock: f64,
+    aim_clock: f64,
+    visual_clock: f64,
+    audio: Audio,
+    audio_notice: Option<String>,
     theme: omarchy_chess::theme::Theme,
     themed: Instant,
 }
@@ -56,25 +64,33 @@ impl App {
             last: Instant::now(),
             accumulator: 0.0,
             movement_clock: 0.0,
+            aim_clock: 0.0,
+            visual_clock: 0.0,
+            audio: Audio::default(),
+            audio_notice: None,
             theme: omarchy_chess::theme::Theme::load(),
             themed: Instant::now(),
         }
     }
     fn persist(&mut self) {
-        if self.blocked {
-            return;
-        }
-        self.save.observe();
-        if let Err(e) = storage::write(&self.path, &self.save) {
-            self.notice = Some(format!("Could not save: {e}"));
+        if !self.blocked {
+            self.save.observe();
+            if let Err(e) = storage::write(&self.path, &self.save) {
+                self.notice = Some(format!("Could not save: {e}"));
+            }
         }
     }
-    pub fn suspend(&mut self) {
-        self.paused = true;
+    fn clear_input(&mut self) {
         self.armed = false;
         self.accumulator = 0.0;
         self.movement_clock = 0.0;
+        self.aim_clock = 0.0;
+    }
+    pub fn suspend(&mut self) {
+        self.paused = true;
+        self.clear_input();
         self.search = None;
+        self.audio.stop();
         self.persist();
     }
     pub fn set_input_enabled(&mut self, enabled: bool) {
@@ -89,6 +105,28 @@ impl App {
     fn ai_turn(&self) -> bool {
         self.save.mode == Mode::Solo && self.save.game.active() == 1
     }
+    fn sound(&mut self, cue: Cue) {
+        if self.save.sound {
+            if let Err(e) = self.audio.play(cue) {
+                self.audio_notice = Some(format!("Sound unavailable: {e}"));
+            }
+        }
+    }
+    fn mute(&mut self) {
+        self.save.sound = !self.save.sound;
+        if !self.save.sound {
+            self.audio.stop();
+        }
+        self.persist();
+    }
+    fn resume(&mut self) {
+        if self.save.started {
+            self.paused = false;
+            self.settings = false;
+            self.restart = false;
+            self.clear_input();
+        }
+    }
     fn begin_match(&mut self) {
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -98,152 +136,441 @@ impl App {
         self.search = None;
         self.restart = false;
         self.paused = false;
-        self.armed = false;
-        self.accumulator = 0.0;
+        self.settings = false;
+        self.clear_input();
+        self.audio.stop();
+        self.notice = if self.blocked {
+            self.notice.take()
+        } else {
+            None
+        };
         self.persist();
     }
-    fn field(&self, ui: &mut egui::Ui) -> (Rect, f32, egui::Response) {
-        let available = ui.available_size();
-        let scale = (available.x / 1000.0).min(available.y / 600.0).max(0.01);
-        let (outer, _) = ui.allocate_exact_size(available, Sense::hover());
-        let rect = Rect::from_center_size(outer.center(), Vec2::new(1000.0, 600.0) * scale);
-        let response = ui.interact(rect, ui.id().with("battlefield"), Sense::drag());
-        let p = ui.painter_at(rect);
-        let pt = |x: f64, y: f64| {
-            Pos2::new(
-                rect.left() + x as f32 * scale,
-                rect.top() + y as f32 * scale,
-            )
-        };
-        let fg = self.theme.foreground;
-        let accent = self.theme.accent;
-        let bg = self.theme.background;
-        p.rect_filled(rect, 0.0, bg);
-        // Survey lines give height and distance references without predicting a shot.
-        for x in (0..=1000).step_by(100) {
-            p.line_segment(
-                [pt(x as f64, 0.0), pt(x as f64, 600.0)],
-                Stroke::new(0.5_f32, fg.gamma_multiply(0.09)),
+    fn choose(&mut self, mode: Mode, difficulty: Difficulty) {
+        self.save.mode = mode;
+        self.save.difficulty = difficulty;
+        self.begin_match();
+    }
+    fn command(&mut self, result: Result<(), Rejected>) {
+        if let Err(e) = result {
+            self.notice = Some(
+                match e {
+                    Rejected::NoFuel => "No movement fuel left this round.",
+                    Rejected::Steep => "That slope is too steep to cross.",
+                    Rejected::Edge => "You have reached the battlefield edge.",
+                    Rejected::Occupied => "The other tank is blocking that move.",
+                    Rejected::NoAmmo => "That weapon is empty. Choose another.",
+                    _ => "Wait until your turn is ready.",
+                }
+                .into(),
             );
         }
-        for y in (0..=600).step_by(100) {
-            p.line_segment(
-                [pt(0.0, y as f64), pt(1000.0, y as f64)],
-                Stroke::new(0.5_f32, fg.gamma_multiply(0.09)),
-            );
-        }
-        let heights = self.save.game.terrain().heights();
-        for x in 0..1000 {
-            p.add(egui::Shape::convex_polygon(
-                vec![
-                    pt(x as f64, heights[x]),
-                    pt(x as f64 + 1.0, heights[x + 1]),
-                    pt(x as f64 + 1.0, 600.0),
-                    pt(x as f64, 600.0),
-                ],
-                accent.gamma_multiply(0.24),
-                Stroke::NONE,
-            ));
-            p.line_segment(
-                [pt(x as f64, heights[x]), pt(x as f64 + 1.0, heights[x + 1])],
-                Stroke::new(1.4_f32, accent),
-            );
-        }
-        for trace in self.save.game.traces() {
-            for pair in trace.windows(2).step_by(3) {
-                p.line_segment(
-                    [pt(pair[0].x, pair[0].y), pt(pair[1].x, pair[1].y)],
-                    Stroke::new(1.0_f32, fg.gamma_multiply(0.25)),
-                );
+    }
+    fn tick(&mut self) {
+        if let Some(r) = &mut self.save.resolution {
+            if r.advance() {
+                self.save.resolution = None;
+                self.clear_input();
+                match self.save.game.phase() {
+                    Phase::MatchOver { .. } => self.sound(Cue::Match),
+                    Phase::RoundOver { winner: Some(_) } => self.sound(Cue::Round),
+                    _ => {}
+                }
+                self.persist();
             }
+            return;
         }
-        for (i, tank) in self.save.game.tanks().iter().enumerate() {
-            let x = tank.position.x;
-            let y = tank.position.y;
-            let ink = if i == 0 { accent } else { fg };
-            p.rect_filled(
-                Rect::from_min_max(pt(x - 12.0, y - 7.0), pt(x + 12.0, y)),
-                0.0,
-                ink,
-            );
-            p.rect_filled(
-                Rect::from_min_max(pt(x - 9.0, y - 14.0), pt(x + 9.0, y - 7.0)),
-                0.0,
-                ink,
-            );
-            // Track cuts and a second turret stripe distinguish the silhouettes.
-            for dx in [-8.0, 0.0, 8.0] {
-                p.line_segment(
-                    [pt(x + dx, y - 5.0), pt(x + dx, y - 1.0)],
-                    Stroke::new(scale, bg),
+        let phase = self.save.game.phase();
+        if let Some(impact) = self.save.game.tick_event() {
+            let cue = match impact.weapon {
+                Weapon::Shell => Cue::Shell,
+                Weapon::Heavy => Cue::Heavy,
+                Weapon::Digger => Cue::Digger,
+            };
+            self.save.resolution = Some(Resolution::new(impact));
+            self.clear_input();
+            self.sound(cue);
+            self.persist();
+        } else if phase == Phase::Flying && self.save.game.phase() != Phase::Flying {
+            self.clear_input();
+            self.notice = Some("Shot missed. Adjust using your previous trace.".into());
+            self.persist();
+        }
+    }
+    fn top(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::top("tanks-header").show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.heading("TANKS");
+                ui.label(
+                    RichText::new(format!(
+                        "ROUND {:02}  /  FIRST TO TWO",
+                        self.save.game.round()
+                    ))
+                    .small(),
                 );
+                if ui
+                    .add_enabled(
+                        self.enabled && self.save.started,
+                        egui::Button::new(if self.paused { "Resume" } else { "Pause" }),
+                    )
+                    .clicked()
+                {
+                    if self.paused {
+                        self.resume()
+                    } else {
+                        self.suspend()
+                    }
+                }
+                if ui
+                    .add_enabled(self.enabled, egui::Button::new("Settings"))
+                    .clicked()
+                {
+                    self.suspend();
+                    self.settings = true;
+                }
+                if ui
+                    .add_enabled(
+                        self.enabled,
+                        egui::Button::new(if self.save.sound { "Sound on" } else { "Muted" }),
+                    )
+                    .clicked()
+                {
+                    self.mute();
+                }
+                if ui
+                    .add_enabled(self.enabled, egui::Button::new("Back to Arcade"))
+                    .clicked()
+                {
+                    self.suspend();
+                    self.leave = true;
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                let wins = self.save.game.wins();
+                for (i, tank) in self.save.game.tanks().iter().enumerate() {
+                    let health = self
+                        .save
+                        .resolution
+                        .as_ref()
+                        .filter(|r| r.progress() < 0.7 && !self.save.reduced_effects)
+                        .map_or(tank.health, |r| r.impact.tanks_before[i].health);
+                    ui.label(
+                        RichText::new(format!(
+                            "{}  ·  {} HP  ·  {} round{}",
+                            if i == 0 {
+                                "P1"
+                            } else if self.save.mode == Mode::Solo {
+                                "CPU"
+                            } else {
+                                "P2"
+                            },
+                            health,
+                            wins[i],
+                            if wins[i] == 1 { "" } else { "s" }
+                        ))
+                        .color(if i == 0 {
+                            self.theme.accent
+                        } else {
+                            self.theme.foreground
+                        }),
+                    );
+                    if i == 0 {
+                        ui.separator();
+                    }
+                }
+            });
+            if let Some(n) = &self.notice {
+                ui.label(n);
             }
-            if i == 1 {
-                p.line_segment(
-                    [pt(x - 6.0, y - 12.0), pt(x + 6.0, y - 12.0)],
-                    Stroke::new(scale, bg),
-                );
-            }
-            let a = f64::from(tank.angle).to_radians();
-            p.line_segment(
-                [
-                    pt(x, y - 7.0),
-                    pt(x + 20.0 * a.cos(), y - 7.0 - 20.0 * a.sin()),
-                ],
-                Stroke::new(3.0 * scale, ink),
-            );
-            p.text(
-                pt(x, y - 32.0),
-                Align2::CENTER_CENTER,
-                format!("P{} · {}", i + 1, tank.health),
-                FontId::monospace((14.0 * scale).max(10.0)),
-                ink,
-            );
-            if i == self.save.game.active() {
-                p.add(egui::Shape::convex_polygon(
-                    vec![
-                        pt(x - 5.0, y - 56.0),
-                        pt(x + 5.0, y - 56.0),
-                        pt(x, y - 48.0),
-                    ],
-                    ink,
-                    Stroke::NONE,
+        });
+    }
+    fn controls(&mut self, ctx: &egui::Context, human: bool, interactive: bool) -> (bool, i8) {
+        let mut fire = false;
+        let mut movement = 0;
+        egui::TopBottomPanel::bottom("tanks-controls").show(ctx, |ui| {
+            let active = self
+                .save
+                .resolution
+                .as_ref()
+                .map_or(self.save.game.active(), |r| r.impact.shooter);
+            let tank = self.save.game.tanks()[active].clone();
+            if let Some(resolution) = &self.save.resolution {
+                ui.set_min_height(92.0);
+                ui.label(RichText::new("IMPACT  /  GROUND SETTLING").strong());
+                ui.label(format!(
+                    "Player {} · {:?} · {}° · Power {}",
+                    active + 1,
+                    resolution.impact.weapon,
+                    tank.angle,
+                    tank.power
                 ));
-            }
-        }
-        if let Some(shot) = self.save.game.projectile() {
-            let pos = shot.position;
-            if pos.y < 0.0 {
-                p.text(
-                    pt(pos.x, 12.0),
-                    Align2::CENTER_TOP,
-                    format!("↑ {:.0}", -pos.y),
-                    FontId::monospace(13.0),
-                    fg,
-                );
+                ui.label("Next turn begins when the ground settles.");
+                return;
             } else {
-                p.circle_filled(pt(pos.x, pos.y), (3.0 * scale).max(2.0), fg);
+                match self.save.game.phase() {
+                    Phase::Ready => {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} — your turn",
+                                    if self.ai_turn() {
+                                        "Computer"
+                                    } else if active == 0 {
+                                        "Player 1"
+                                    } else {
+                                        "Player 2"
+                                    }
+                                ))
+                                .strong(),
+                            );
+                            if !self.ai_turn()
+                                && (ui
+                                    .add_enabled(interactive, egui::Button::new("Ready · Enter"))
+                                    .clicked()
+                                    || (interactive && ctx.input(|i| i.key_pressed(Key::Enter))))
+                            {
+                                let result = self.save.game.ready();
+                                self.command(result);
+                                self.clear_input();
+                                self.notice = None;
+                            }
+                        });
+                    }
+                    Phase::Flying => {
+                        ui.label("SHOT IN FLIGHT  /  WATCH YOUR ARC");
+                    }
+                    Phase::Aiming => {
+                        ui.label(if self.ai_turn() {
+                            "Computer is lining up a shot…"
+                        } else {
+                            "SET YOUR ANGLE. READ THE WIND."
+                        });
+                    }
+                    Phase::RoundOver { winner } => {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new(
+                                    winner.map_or("DRAW — both tanks eliminated".into(), |i| {
+                                        format!("PLAYER {} TAKES THE ROUND", i + 1)
+                                    }),
+                                )
+                                .strong(),
+                            );
+                            if ui
+                                .add_enabled(interactive, egui::Button::new("Next round · Enter"))
+                                .clicked()
+                                || (interactive && ctx.input(|i| i.key_pressed(Key::Enter)))
+                            {
+                                let result = self.save.game.next_round();
+                                self.command(result);
+                                self.clear_input();
+                                self.persist();
+                            }
+                        });
+                    }
+                    Phase::MatchOver { winner } => {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.heading(format!("PLAYER {} WINS", winner + 1));
+                            if ui
+                                .add_enabled(interactive, egui::Button::new("Play again · Enter"))
+                                .clicked()
+                                || (interactive && ctx.input(|i| i.key_pressed(Key::Enter)))
+                            {
+                                self.begin_match();
+                            }
+                        });
+                    }
+                }
             }
+            ui.add_enabled_ui(human && !self.paused, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let mut angle = tank.angle;
+                    let mut power = tank.power;
+                    ui.label("ANGLE");
+                    ui.add(
+                        egui::DragValue::new(&mut angle)
+                            .range(5..=175)
+                            .suffix("°")
+                            .speed(0.3),
+                    );
+                    ui.label("POWER");
+                    let old_width = ui.spacing().slider_width;
+                    ui.spacing_mut().slider_width =
+                        (ui.available_width() * 0.25).clamp(85.0, 180.0);
+                    let slider = ui.add(egui::Slider::new(&mut power, 1..=100));
+                    ui.spacing_mut().slider_width = old_width;
+                    if slider.hovered() {
+                        let scroll = ctx.input_mut(|i| {
+                            let d = i.smooth_scroll_delta.y;
+                            i.smooth_scroll_delta = Vec2::ZERO;
+                            d
+                        });
+                        if scroll != 0.0 {
+                            power = (i32::from(power) + if scroll > 0.0 { 1 } else { -1 })
+                                .clamp(1, 100) as u16;
+                        }
+                    }
+                    if angle != tank.angle || power != tank.power {
+                        let result = self.save.game.aim(angle, power);
+                        self.command(result);
+                    }
+                    fire = ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("FIRE · Space")
+                                    .strong()
+                                    .color(self.theme.accent_text()),
+                            )
+                            .fill(self.theme.accent)
+                            .min_size(Vec2::new(130.0, 36.0)),
+                        )
+                        .clicked();
+                });
+                ui.horizontal_wrapped(|ui| {
+                    let left = ui.button("A · Move left").on_hover_text("Hold A");
+                    let right = ui.button("D · Move right").on_hover_text("Hold D");
+                    movement = i8::from(right.is_pointer_button_down_on())
+                        - i8::from(left.is_pointer_button_down_on());
+                    ui.label(format!("FUEL {:.0}", tank.fuel));
+                    ui.separator();
+                    for (w, label) in [
+                        (Weapon::Shell, "1  Shell ∞".to_string()),
+                        (Weapon::Heavy, format!("2  Heavy ×{}", tank.heavy)),
+                        (Weapon::Digger, format!("3  Digger ×{}", tank.diggers)),
+                    ] {
+                        if ui
+                            .add_enabled(
+                                tank.available(w),
+                                egui::Button::new(label).selected(tank.weapon == w),
+                            )
+                            .clicked()
+                        {
+                            let result = self.save.game.select(w);
+                            self.command(result);
+                        }
+                    }
+                });
+            });
+        });
+        (fire, movement)
+    }
+    fn menus(&mut self, ctx: &egui::Context) {
+        if !self.paused {
+            return;
         }
-        (rect, scale, response)
+        let fresh = !self.save.started;
+        let title = if self.settings {
+            "Tanks settings"
+        } else if fresh {
+            "Choose your battle"
+        } else {
+            "Paused"
+        };
+        egui::Window::new(title)
+            .enabled(self.enabled)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.set_min_width(280.0);
+                if self.settings {
+                    let mut sound = self.save.sound;
+                    if ui.checkbox(&mut sound, "Sound · Ctrl+M").changed() {
+                        self.mute();
+                    }
+                    if ui
+                        .checkbox(&mut self.save.reduced_effects, "Reduced effects")
+                        .changed()
+                    {
+                        self.persist();
+                    }
+                    if let Some(n) = &self.audio_notice {
+                        ui.label(n);
+                    }
+                    ui.label("↑↓ angle · ←→ power · A/D move · 1/2/3 weapon");
+                }
+                if fresh || self.restart {
+                    ui.label(if fresh {
+                        "Pick a mode. First to two rounds wins."
+                    } else {
+                        "Starting again replaces your unfinished match."
+                    });
+                    for (mode, difficulty, label) in [
+                        (Mode::Solo, Difficulty::Easy, "1 · Solo — Easy"),
+                        (Mode::Solo, Difficulty::Normal, "2 · Solo — Normal"),
+                        (Mode::Local, Difficulty::Normal, "3 · Two local players"),
+                    ] {
+                        if ui
+                            .add_sized([280.0, 38.0], egui::Button::new(label))
+                            .clicked()
+                        {
+                            self.choose(mode, difficulty);
+                        }
+                    }
+                    if !fresh && ui.button("Cancel").clicked() {
+                        self.restart = false;
+                    }
+                } else {
+                    ui.label("Your match is saved. Continue when ready.");
+                    if ui
+                        .add_sized([280.0, 38.0], egui::Button::new("Resume · Escape"))
+                        .clicked()
+                    {
+                        self.resume();
+                    }
+                    if ui.button("New match…").clicked() {
+                        self.restart = true;
+                        self.armed = false;
+                    }
+                    ui.label(format!(
+                        "Solo {} wins / {} losses · Local {} matches",
+                        self.save.solo_wins, self.save.solo_losses, self.save.local_matches
+                    ));
+                }
+                if self.blocked {
+                    ui.label("Original save retained. Saving is disabled.");
+                    if ui.button("Archive original and reset").clicked() {
+                        match storage::archive(&self.path) {
+                            Ok(path) => {
+                                self.blocked = false;
+                                self.save = Save::default();
+                                self.notice =
+                                    Some(format!("Original archived: {}", path.display()));
+                                self.search = None;
+                                self.audio.stop();
+                                self.clear_input();
+                                self.persist();
+                            }
+                            Err(e) => self.notice = Some(format!("Archive failed: {e}")),
+                        }
+                    }
+                }
+                if ui.button("Back to Arcade").clicked() {
+                    self.suspend();
+                    self.leave = true;
+                }
+            });
     }
     pub fn frame(&mut self, ctx: &egui::Context) {
         let elapsed = self.last.elapsed().as_secs_f64();
         self.last = Instant::now();
+        if let Err(e) = self.audio.poll() {
+            self.audio_notice = Some(e);
+        }
         if self.themed.elapsed() > Duration::from_secs(2) {
             self.theme = omarchy_chess::theme::Theme::load();
             self.themed = Instant::now();
         }
-        let mut visuals = if self.theme.light() {
+        let mut v = if self.theme.light() {
             egui::Visuals::light()
         } else {
             egui::Visuals::dark()
         };
-        visuals.panel_fill = self.theme.background;
-        visuals.window_fill = self.theme.background;
-        visuals.override_text_color = Some(self.theme.foreground);
-        visuals.selection.bg_fill = self.theme.accent;
-        ctx.set_visuals(visuals);
+        v.panel_fill = self.theme.background;
+        v.window_fill = self.theme.background;
+        v.override_text_color = Some(self.theme.foreground);
+        v.selection.bg_fill = self.theme.accent;
+        ctx.set_visuals(v);
         arcade_presentation::apply(ctx);
         let focused = ctx.input(|i| i.focused);
         if (!focused || elapsed > 0.25) && !self.paused {
@@ -253,6 +580,7 @@ impl App {
             i.pointer.any_down()
                 || [
                     Key::Space,
+                    Key::Enter,
                     Key::A,
                     Key::D,
                     Key::ArrowUp,
@@ -269,219 +597,62 @@ impl App {
         if !self.armed && !held && focused && self.enabled {
             self.armed = true;
         }
-        if self.enabled && focused && ctx.input(|i| i.key_pressed(Key::Escape)) {
-            if self.paused {
-                self.settings = false;
-                self.restart = false;
-                self.paused = false;
-                self.armed = false;
-            } else {
-                self.suspend();
+        if self.enabled && focused {
+            if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::M)) {
+                self.mute();
             }
-        }
-        if self.enabled && focused && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Comma)) {
-            self.suspend();
-            self.settings = true;
-        }
-        let interactive = self.enabled && focused && !self.paused && self.armed;
-        let human = interactive && !self.ai_turn() && self.save.game.phase() == Phase::Aiming;
-        let mut fire = false;
-        let mut movement = 0;
-        egui::TopBottomPanel::top("tanks-header").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.heading("TANKS");
-                ui.label(format!("ROUND {} · FIRST TO TWO", self.save.game.round()));
-                let wins = self.save.game.wins();
-                ui.label(format!("P1 {} : {} P2", wins[0], wins[1]));
-                ui.label(format!("WIND {:+.0}", self.save.game.wind()));
-                if ui
-                    .add_enabled(
-                        self.enabled,
-                        egui::Button::new(if self.paused { "Resume" } else { "Pause" }),
-                    )
-                    .clicked()
-                {
-                    if self.paused {
-                        self.paused = false;
-                        self.settings = false;
+            if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                if self.paused {
+                    if self.restart {
                         self.restart = false;
-                        self.armed = false;
                     } else {
-                        self.suspend();
+                        self.resume();
                     }
-                }
-                if ui.button("Settings").clicked() {
+                } else {
                     self.suspend();
-                    self.settings = true;
                 }
-                if ui.button("Back to Arcade").clicked() {
-                    self.suspend();
-                    self.leave = true;
-                }
-            });
-            if let Some(notice) = self.notice.clone() {
-                ui.label(notice);
             }
-        });
-        egui::TopBottomPanel::bottom("tanks-controls").show(ctx, |ui| {
-            let active = self.save.game.active();
-            let tank = self.save.game.tanks()[active].clone();
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!(
-                    "P{} · HEALTH {} · FUEL {:.0}",
-                    active + 1,
-                    tank.health,
-                    tank.fuel
-                ));
-                ui.add_enabled_ui(human, |ui| {
-                    let mut angle = tank.angle;
-                    let mut power = tank.power;
-                    ui.label("Angle");
-                    ui.add(egui::DragValue::new(&mut angle).range(5..=175).suffix("°"));
-                    ui.label("Power");
-                    let slider = ui.add(egui::Slider::new(&mut power, 1..=100));
-                    if slider.hovered() {
-                        let scroll = ctx.input_mut(|i| {
-                            let d = i.smooth_scroll_delta.y;
-                            i.smooth_scroll_delta = Vec2::ZERO;
-                            d
-                        });
-                        if scroll != 0.0 {
-                            power = (i32::from(power) + if scroll > 0.0 { 1 } else { -1 })
-                                .clamp(1, 100) as u16;
-                        }
-                    }
-                    if angle != tank.angle || power != tank.power {
-                        let _ = self.save.game.aim(angle, power);
-                    }
-                    let left = ui.button("← Move").on_hover_text("A · hold to move");
-                    let right = ui.button("Move →").on_hover_text("D · hold to move");
-                    movement = i8::from(right.is_pointer_button_down_on())
-                        - i8::from(left.is_pointer_button_down_on());
-                    fire = ui.button("FIRE · Space").clicked();
-                });
-            });
-            ui.horizontal_wrapped(|ui| {
-                for (weapon, label) in [
-                    (Weapon::Shell, "1 Shell ∞".to_string()),
-                    (Weapon::Heavy, format!("2 Heavy · {}", tank.heavy)),
-                    (Weapon::Digger, format!("3 Digger · {}", tank.diggers)),
-                ] {
-                    if ui
-                        .add_enabled(
-                            human && tank.available(weapon),
-                            egui::Button::new(label).selected(tank.weapon == weapon),
-                        )
-                        .clicked()
-                    {
-                        let _ = self.save.game.select(weapon);
-                    }
-                }
-                ui.label("↑↓ angle · ←→ power · A/D move");
-            });
-            match self.save.game.phase() {
-                Phase::Ready => {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("Player {} — ready?", active + 1));
-                        if ui
-                            .add_enabled(interactive, egui::Button::new("Ready · Enter"))
-                            .clicked()
-                            || (interactive && ctx.input(|i| i.key_pressed(Key::Enter)))
-                        {
-                            let _ = self.save.game.ready();
-                            self.armed = false;
-                        }
-                    });
-                }
-                Phase::Flying => {
-                    ui.label("SHOT IN FLIGHT");
-                }
-                Phase::Aiming if self.ai_turn() => {
-                    ui.label("Computer is choosing a shot…");
-                }
-                Phase::RoundOver { winner } => {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            winner.map_or("Both tanks eliminated — drawn round".into(), |i| {
-                                format!("Player {} wins the round", i + 1)
-                            }),
-                        );
-                        if ui
-                            .add_enabled(interactive, egui::Button::new("Next round · Enter"))
-                            .clicked()
-                            || (interactive && ctx.input(|i| i.key_pressed(Key::Enter)))
-                        {
-                            let _ = self.save.game.next_round();
-                            self.armed = false;
-                            self.persist();
-                        }
-                    });
-                }
-                Phase::MatchOver { winner } => {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("PLAYER {} WINS THE MATCH", winner + 1));
-                        if ui
-                            .add_enabled(interactive, egui::Button::new("Play again"))
-                            .clicked()
-                        {
-                            self.begin_match();
-                        }
-                    });
-                }
-                _ => {}
+            if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Comma)) {
+                self.suspend();
+                self.settings = true;
             }
-        });
+            if self.paused && self.armed && (!self.save.started || self.restart) && !self.settings {
+                if ctx.input(|i| i.key_pressed(Key::Num1)) {
+                    self.choose(Mode::Solo, Difficulty::Easy);
+                } else if ctx.input(|i| i.key_pressed(Key::Num2)) {
+                    self.choose(Mode::Solo, Difficulty::Normal);
+                } else if ctx.input(|i| i.key_pressed(Key::Num3)) {
+                    self.choose(Mode::Local, Difficulty::Normal);
+                }
+            }
+        }
+        let interactive =
+            self.enabled && focused && !self.paused && self.armed && self.save.resolution.is_none();
+        let human = interactive && !self.ai_turn() && self.save.game.phase() == Phase::Aiming;
+        self.top(ctx);
+        let (mut fire, mut movement) = self.controls(ctx, human, interactive);
         egui::CentralPanel::default().show(ctx, |ui| {
-            let (rect, scale, response) = self.field(ui);
-            if human && response.dragged() {
+            let (rect, scale, response) = render::field(self, ui);
+            if human && !self.paused && response.dragged() {
                 if let Some(pos) = response.interact_pointer_pos() {
-                    let tank = &self.save.game.tanks()[self.save.game.active()];
-                    let point = Point {
+                    let t = &self.save.game.tanks()[self.save.game.active()];
+                    let p = Point {
                         x: f64::from((pos.x - rect.left()) / scale),
                         y: f64::from((pos.y - rect.top()) / scale),
                     };
-                    let centre = tank.centre();
-                    let angle = (centre.y - point.y)
-                        .atan2(point.x - centre.x)
-                        .to_degrees()
-                        .clamp(5.0, 175.0) as u16;
-                    let _ = self.save.game.aim(angle, tank.power);
+                    let c = t.centre();
+                    let a = (c.y - p.y).atan2(p.x - c.x).to_degrees().clamp(5.0, 175.0) as u16;
+                    let result = self.save.game.aim(a, t.power);
+                    self.command(result);
                 }
             }
         });
-        if self.paused {
-            egui::Window::new(if self.settings{"Tanks settings"}else{"Paused"}).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER,Vec2::ZERO).show(ctx,|ui| {
-                ui.label("Match preserved. Resume when ready.");
-                ui.label(format!("Solo: {} wins / {} losses · Local: {} matches",self.save.solo_wins,self.save.solo_losses,self.save.local_matches));
-                if self.settings {
-                    ui.checkbox(&mut self.save.reduced_effects,"Reduced effects");
-                    ui.label("This preview is silent. Sound and impact animation are still in development.");
-                    ui.label("Choose mode and difficulty for a new match:");
-                    // Mode remains tied to this match until a confirmed replacement.
-                }
-                if self.restart {
-                    ui.label("Discard this match and start again?");
-                    for (mode,difficulty,label) in [(Mode::Solo,Difficulty::Easy,"Solo — Easy"),(Mode::Solo,Difficulty::Normal,"Solo — Normal"),(Mode::Local,Difficulty::Normal,"Two local players")] {
-                        if ui.button(label).clicked() {self.save.mode=mode;self.save.difficulty=difficulty;self.begin_match();}
-                    }
-                    if ui.button("Cancel").clicked(){self.restart=false;}
-                } else if ui.button("New match…").clicked(){self.restart=true;}
-                if self.blocked {
-                    ui.label("Saving is disabled to protect the original file.");
-                    if ui.button("Archive original and reset").clicked() {match storage::archive(&self.path) {Ok(path)=>{self.blocked=false;self.save=Save::default();self.notice=Some(format!("Original archived to {}",path.display()));self.persist();},Err(e)=>self.notice=Some(format!("Archive failed; original retained: {e}"))}}
-                }
-                if ui.button("Resume · Escape").clicked(){self.paused=false;self.settings=false;self.restart=false;self.armed=false;self.persist();}
-                if ui.button("Back to Arcade").clicked(){self.suspend();self.leave=true;}
-            });
-        }
+        self.menus(ctx);
         if human && self.armed && !self.paused && !ctx.wants_keyboard_input() {
-            let t = self.save.game.tanks()[self.save.game.active()].clone();
-            let (da, dp, m, f, weapon) = ctx.input(|i| {
+            let (da, dp, m, f, weapon, pressed) = ctx.input(|i| {
                 (
-                    i32::from(i.key_pressed(Key::ArrowUp))
-                        - i32::from(i.key_pressed(Key::ArrowDown)),
-                    i32::from(i.key_pressed(Key::ArrowRight))
-                        - i32::from(i.key_pressed(Key::ArrowLeft)),
+                    i32::from(i.key_down(Key::ArrowUp)) - i32::from(i.key_down(Key::ArrowDown)),
+                    i32::from(i.key_down(Key::ArrowRight)) - i32::from(i.key_down(Key::ArrowLeft)),
                     i8::from(i.key_down(Key::D)) - i8::from(i.key_down(Key::A)),
                     i.key_pressed(Key::Space),
                     if i.key_pressed(Key::Num1) {
@@ -493,20 +664,50 @@ impl App {
                     } else {
                         None
                     },
+                    i.events.iter().any(|e| {
+                        matches!(
+                            e,
+                            egui::Event::Key {
+                                key: Key::ArrowUp
+                                    | Key::ArrowDown
+                                    | Key::ArrowLeft
+                                    | Key::ArrowRight,
+                                pressed: true,
+                                repeat: false,
+                                ..
+                            }
+                        )
+                    }),
                 )
             });
             if da != 0 || dp != 0 {
-                let _ = self.save.game.aim(
-                    (i32::from(t.angle) + da).clamp(5, 175) as u16,
-                    (i32::from(t.power) + dp).clamp(1, 100) as u16,
-                );
+                self.aim_clock += elapsed.min(0.25) * 40.0;
+                let steps = if pressed {
+                    self.aim_clock = 0.0;
+                    1
+                } else {
+                    let n = self.aim_clock.floor() as i32;
+                    self.aim_clock -= f64::from(n);
+                    n
+                };
+                if steps > 0 {
+                    let t = &self.save.game.tanks()[self.save.game.active()];
+                    let result = self.save.game.aim(
+                        (i32::from(t.angle) + da * steps).clamp(5, 175) as u16,
+                        (i32::from(t.power) + dp * steps).clamp(1, 100) as u16,
+                    );
+                    self.command(result);
+                }
+            } else {
+                self.aim_clock = 0.0;
             }
             if m != 0 {
                 movement = m;
             }
             fire |= f;
             if let Some(w) = weapon {
-                let _ = self.save.game.select(w);
+                let result = self.save.game.select(w);
+                self.command(result);
             }
         }
         if interactive && !self.paused && self.armed {
@@ -515,8 +716,9 @@ impl App {
                     self.movement_clock += elapsed.min(0.25) * 30.0;
                     while self.movement_clock >= 1.0 {
                         self.movement_clock -= 1.0;
-                        if let Err(e) = self.save.game.move_one(movement > 0) {
-                            self.notice = Some(format!("Cannot move: {e:?}"));
+                        let result = self.save.game.move_one(movement > 0);
+                        if result.is_err() {
+                            self.command(result);
                             self.movement_clock = 0.0;
                             break;
                         }
@@ -525,8 +727,14 @@ impl App {
                     self.movement_clock = 0.0;
                 }
                 if fire {
-                    let _ = self.save.game.fire();
-                    self.armed = false;
+                    match self.save.game.fire() {
+                        Ok(()) => {
+                            self.clear_input();
+                            self.notice = None;
+                            self.sound(Cue::Launch);
+                        }
+                        Err(e) => self.command(Err(e)),
+                    }
                 }
             }
             if self.ai_turn() {
@@ -540,26 +748,25 @@ impl App {
                     }
                     if let Some(search) = &mut self.search {
                         if search.advance(1024) {
-                            if search.apply(&mut self.save.game).is_ok() {
+                            let fired = search.apply(&mut self.save.game).is_ok();
+                            if fired {
                                 self.save.ai_seed = search.next_seed();
                             }
                             self.search = None;
+                            if fired {
+                                self.sound(Cue::Launch);
+                            }
                         }
                     }
                 }
             }
         }
-        if !self.paused && self.enabled && focused {
+        if !self.paused && self.enabled && focused && self.save.started {
+            self.visual_clock += elapsed.min(0.25);
             self.accumulator += elapsed.min(0.25);
             while self.accumulator >= DT {
                 self.accumulator -= DT;
-                let phase = self.save.game.phase();
-                self.save.game.tick();
-                if phase == Phase::Flying && self.save.game.phase() != Phase::Flying {
-                    self.armed = false;
-                    self.movement_clock = 0.0;
-                    self.persist();
-                }
+                self.tick();
             }
         } else {
             self.accumulator = 0.0;
@@ -575,7 +782,6 @@ impl eframe::App for App {
         self.suspend();
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,6 +824,8 @@ mod tests {
         let path = dir.path().join("tanks.json");
         let mut app = App::from_path(path.clone());
         app.save.mode = Mode::Local;
+        app.save.started = true;
+        app.save.sound = false;
         let ctx = egui::Context::default();
         frame(&mut app, &ctx, vec![]);
         key(&mut app, &ctx, Key::Space);
@@ -645,6 +853,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::from_path(dir.path().join("tanks.json"));
         app.save.mode = Mode::Local;
+        app.save.started = true;
+        app.save.sound = false;
         app.save.game.ready().unwrap();
         app.paused = false;
         let ctx = egui::Context::default();
@@ -706,5 +916,64 @@ mod tests {
         app.begin_match();
         app.suspend();
         assert_eq!(std::fs::read(path).unwrap(), b"future-save");
+    }
+    #[test]
+    fn first_run_choice_does_not_fire_or_select_a_weapon() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::from_path(dir.path().join("tanks.json"));
+        app.save.sound = false;
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, vec![]);
+        key(&mut app, &ctx, Key::Space);
+        assert!(!app.save.started);
+        key(&mut app, &ctx, Key::Num3);
+        assert!(app.save.started);
+        assert_eq!(app.save.mode, Mode::Local);
+        assert_eq!(app.save.game.phase(), Phase::Ready);
+        assert_eq!(
+            app.save.game.tanks()[app.save.game.active()].weapon,
+            Weapon::Shell
+        );
+    }
+    #[test]
+    fn impact_pause_reopen_and_reduced_effects_preserve_exact_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tanks.json");
+        let mut app = App::from_path(path.clone());
+        app.save.started = true;
+        app.save.mode = Mode::Local;
+        app.save.sound = false;
+        app.save.game.ready().unwrap();
+        app.save.game.aim(90, 1).unwrap();
+        app.save.game.fire().unwrap();
+        for _ in 0..2400 {
+            app.tick();
+            if app.save.resolution.is_some() {
+                break;
+            }
+        }
+        assert!(app.save.resolution.is_some());
+        for _ in 0..43 {
+            app.tick();
+        }
+        app.suspend();
+        let mut resumed = App::from_path(path);
+        assert_eq!(resumed.save, app.save);
+        assert!(!resumed.blocked);
+        let ctx = egui::Context::default();
+        let snapshot = resumed.save.clone();
+        frame(&mut resumed, &ctx, vec![]);
+        key(&mut resumed, &ctx, Key::Enter);
+        key(&mut resumed, &ctx, Key::Space);
+        assert_eq!(resumed.save, snapshot);
+        resumed.save.reduced_effects = true;
+        for _ in 0..108 {
+            app.tick();
+            resumed.tick();
+        }
+        assert!(app.save.resolution.is_none());
+        assert!(resumed.save.resolution.is_none());
+        assert_eq!(app.save.game, resumed.save.game);
+        assert_eq!(app.save.game, snapshot.game);
     }
 }
