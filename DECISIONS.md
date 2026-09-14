@@ -135,3 +135,17 @@ design references, test evidence and architecture documents remain in source.
 Publish debug symbols separately and install only the player package in Arch CI.
 Check the extracted payload against the allowlist and report component sizes.
 This changes packaging only, not artwork, gameplay, save paths or recovery policy.
+
+## Tanks engine foundation (issue #8)
+
+- Start Tanks as a dependency-free, UI-independent Rust workspace library under
+  `games/tanks`. This engine milestone does not add a shelf placeholder or change
+  the native application, existing games, approved assets, saves or package payload.
+- Use a 120 Hz simulation, piecewise linear heightfield and swept point-projectile
+  contacts. Resolve blast damage from one snapshot, then crater/settle both tanks
+  and award the result once. Explicit Ready and RoundOver states let the later
+  frontend implement safe handover and draw acknowledgement.
+- Preview rules, support geometry, damage rounding and numeric tuning are recorded
+  in `games/tanks/README.md`. Values remain provisional until recorded playtesting.
+  Cloned simulation state is not yet a disk persistence contract. AI, native UI,
+  storage, audio and Omarchy acceptance remain subsequent slices of issue #8.
