@@ -14,33 +14,32 @@ A collection of classic games for Omarchy. Play pinball, cards, puzzles and arca
 
 Circuit Pinball · Solitaire · Scram · Invaders · Chess · Stack · Snake · Bubble · Blast · 2048 · Shatter · Tanks
 
-**v0.2.0 release preparation for x86_64 Omarchy.** Twelve games, including
-2048, Shatter and Tanks. [Release notes and readiness](docs/releases/v0.2.0.md).
-The versioned package is being prepared; it has not been published yet.
+**v0.2.0 for x86_64 Omarchy.** Twelve games, including 2048, Shatter and Tanks.
+[Download v0.2.0](https://github.com/tcballard/omarchy-retro-arcade/releases/tag/v0.2.0)
+for the player package, matching source, checksums and current testing limitations.
 
 ## Install
 
-1. [Download the verified twelve-game development build](https://github.com/tcballard/omarchy-retro-arcade/actions/runs/34886679784/artifacts/10365483280) from GitHub Actions. Sign in to GitHub if prompted.
-2. Extract the ZIP and open a terminal in the extracted folder.
-3. Install the package:
+1. Open the [v0.2.0 release](https://github.com/tcballard/omarchy-retro-arcade/releases/tag/v0.2.0).
+2. Download `omarchy-retro-arcade-0.2.0-1-x86_64.pkg.tar.zst` and `SHA256SUMS` into the same directory.
+3. Verify and install:
 
 ```sh
-sudo pacman -U ./omarchy-retro-arcade-[0-9]*.pkg.tar.zst
+sha256sum --ignore-missing --check SHA256SUMS
+sudo pacman -U ./omarchy-retro-arcade-0.2.0-1-x86_64.pkg.tar.zst
 ```
 
 Open **Omarchy Arcade** from your app launcher. Click a game and **Play**, or double-click its title. You can also select with the arrow keys and press `Enter`. Click **Arcade** (or press `Ctrl+H`) to return; **Full screen** and `F11` toggle fullscreen, and `Ctrl+Q` quits. See the [mouse controls and per-game input guide](docs/MOUSE-SUPPORT.md).
 
 The package includes all twelve games and a bundled Stockfish engine for Chess. It replaces conflicting standalone game packages while retaining their existing save files and settings. The app works offline and needs no account.
 
-That download was built from `8d1d74d` on 14 September 2026 and still reports
-version 0.1.0. It is the tested baseline, not the forthcoming v0.2.0 package.
-It supports **x86_64**; no ARM package or live Omarchy/Wayland acceptance is claimed.
-GitHub Actions downloads expire; [current builds](https://github.com/tcballard/omarchy-retro-arcade/actions/workflows/arcade.yml)
-remain available separately from versioned releases.
+The release supports **x86_64** and includes the checked player package, matching
+application/Stockfish source, build identity and SHA-256 checksums. Automated
+native and Arch checks passed on its exact source commit. Live Omarchy/Wayland
+audio and gameplay acceptance and aarch64 remain unverified; see the release notes.
+This is a community app, not an official Omarchy package.
 
-Release preparation produces a `release-v0.2.0-x86_64` artifact with the player
-package, corresponding source, release notes, build identity and SHA-256 checksums.
-Install only the player package; debug symbols are optional and separate.
+Debug symbols are optional and remain available from the matching CI build.
 See [player package contents](packaging/PLAYER.md).
 
 ## Build
